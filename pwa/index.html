@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Face Swap" />
+  <meta name="theme-color" content="#0c0d12" />
+  <title>Face Swap</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <style>
+    :root {
+      --bg: #0c0d12; --card: #17181f; --line: #2a2c36; --text: #f4f3f8;
+      --muted: #9a9aac; --accent: #7c5cff; --ok: #3dd68c; --bad: #ff5d73;
+      --safe-t: env(safe-area-inset-top); --safe-b: env(safe-area-inset-bottom);
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
+    body { min-height: 100dvh; padding: calc(18px + var(--safe-t)) 18px calc(28px + var(--safe-b)); }
+    header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 18px; }
+    h1 { font-size: 28px; letter-spacing: -0.03em; margin: 0; }
+    p.sub { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+    .chip { font-size: 11px; font-weight: 600; padding: 6px 10px; border-radius: 999px; background: #22232c; color: var(--muted); }
+    .chip.ok { color: var(--ok); background: #123322; }
+    .chip.bad { color: var(--bad); background: #3a1520; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .slot { background: var(--card); border: 1px solid var(--line); border-radius: 18px; overflow: hidden; min-height: 210px; display: flex; flex-direction: column; }
+    .slot h2 { margin: 0; padding: 12px 12px 0; font-size: 13px; color: var(--muted); }
+    .preview { flex: 1; min-height: 140px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; }
+    .preview img { width: 100%; height: 180px; object-fit: cover; display: block; }
+    .actions { display: flex; gap: 8px; padding: 10px; }
+    button, .filebtn { appearance: none; border: 0; border-radius: 12px; padding: 10px 0; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; flex: 1; text-align: center; }
+    .filebtn, .ghost { background: #2a2c36; color: var(--text); }
+    .primary { width: 100%; margin-top: 16px; padding: 16px; border-radius: 16px; background: var(--accent); color: white; font-size: 17px; font-weight: 700; }
+    .primary:disabled { opacity: 0.4; }
+    .result { margin-top: 16px; background: var(--card); border: 1px solid var(--line); border-radius: 18px; overflow: hidden; display: none; }
+    .result.show { display: block; }
+    .result img { width: 100%; display: block; }
+    .result .bar { display: flex; gap: 8px; padding: 12px; }
+    .err { display: none; margin-top: 12px; padding: 12px; border-radius: 12px; background: #3a1520; color: #ffd0d6; font-size: 14px; }
+    .err.show { display: block; }
+    .hint { margin-top: 18px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .busy { display: none; margin-top: 12px; color: var(--muted); font-size: 14px; text-align: center; }
+    .busy.show { display: block; }
+    input[type=file] { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Face Swap</h1>
+      <p class="sub">Local InsightFace on the host. Photos stay on your LAN.</p>
+    </div>
+    <div id="chip" class="chip">checking…</div>
+  </header>
+  <div class="grid">
+    <section class="slot">
+      <h2>Your face</h2>
+      <div class="preview" id="srcPrev">Library or camera</div>
+      <div class="actions">
+        <label class="filebtn">Library<input type="file" accept="image/*" data-role="src" /></label>
+        <label class="filebtn">Camera<input type="file" accept="image/*" capture="user" data-role="src" /></label>
+      </div>
+    </section>
+    <section class="slot">
+      <h2>Target photo</h2>
+      <div class="preview" id="tgtPrev">Body / scene stays</div>
+      <div class="actions">
+        <label class="filebtn">Library<input type="file" accept="image/*" data-role="tgt" /></label>
+        <label class="filebtn">Camera<input type="file" accept="image/*" capture="environment" data-role="tgt" /></label>
+      </div>
+    </section>
+  </div>
+  <button class="primary" id="go" disabled>Swap face</button>
+  <div class="busy" id="busy">Swapping on the host…</div>
+  <div class="err" id="err"></div>
+  <section class="result" id="result">
+    <img id="out" alt="Swapped result" />
+    <div class="bar">
+      <a class="filebtn" id="save" download="face-swap.jpg">Save</a>
+      <button class="ghost" id="again">New swap</button>
+    </div>
+  </section>
+  <p class="hint" id="hint">Install: Safari Share → Add to Home Screen. Same Wi-Fi as the Windows host. Not an App Store IPA.</p>
+  <script>
+    const state = { src: null, tgt: null };
+    const $ = (id) => document.getElementById(id);
+    async function fileToJpeg(file, maxEdge = 1280) {
+      const bmp = await createImageBitmap(file);
+      const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
+      const w = Math.max(1, Math.round(bmp.width * scale));
+      const h = Math.max(1, Math.round(bmp.height * scale));
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      c.getContext("2d").drawImage(bmp, 0, 0, w, h);
+      bmp.close();
+      return c.toDataURL("image/jpeg", 0.9);
+    }
+    function showPreview(role, dataUrl) {
+      const el = role === "src" ? $("srcPrev") : $("tgtPrev");
+      el.innerHTML = "";
+      const img = document.createElement("img");
+      img.alt = role; img.src = dataUrl; el.appendChild(img);
+      $("go").disabled = !(state.src && state.tgt);
+    }
+    document.querySelectorAll("input[type=file]").forEach((input) => {
+      input.addEventListener("change", async (ev) => {
+        const file = ev.target.files && ev.target.files[0];
+        ev.target.value = "";
+        if (!file) return;
+        try {
+          $("err").classList.remove("show");
+          const data = await fileToJpeg(file);
+          const role = input.getAttribute("data-role");
+          if (role === "src") state.src = data; else state.tgt = data;
+          showPreview(role, data);
+        } catch (e) {
+          $("err").textContent = "Could not read that photo. Try JPEG/PNG, or take a new picture.";
+          $("err").classList.add("show");
+        }
+      });
+    });
+    async function health() {
+      try {
+        const r = await fetch("/api/ios/health", { cache: "no-store" });
+        const j = await r.json();
+        const ok = j.status === "ok";
+        $("chip").textContent = ok ? "engine live" : "engine down";
+        $("chip").className = "chip " + (ok ? "ok" : "bad");
+        if (j.gateway && j.gateway.lan_urls && j.gateway.lan_urls.length) {
+          $("hint").textContent = "This phone: " + location.origin + " · Safari Share → Add to Home Screen. LAN: " + j.gateway.lan_urls.join(" ");
+        }
+      } catch {
+        $("chip").textContent = "gateway down";
+        $("chip").className = "chip bad";
+      }
+    }
+    $("go").addEventListener("click", async () => {
+      if (!state.src || !state.tgt) return;
+      $("go").disabled = true;
+      $("busy").classList.add("show");
+      $("err").classList.remove("show");
+      $("result").classList.remove("show");
+      try {
+        const r = await fetch("/api/ios/swap", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ source_image: state.src, target_image: state.tgt }),
+        });
+        const j = await r.json();
+        if (!r.ok || !j.ok || !j.image) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+        $("out").src = j.image;
+        $("save").href = j.image;
+        $("result").classList.add("show");
+      } catch (e) {
+        $("err").textContent = String(e.message || e);
+        $("err").classList.add("show");
+      } finally {
+        $("busy").classList.remove("show");
+        $("go").disabled = !(state.src && state.tgt);
+      }
+    });
+    $("again").addEventListener("click", () => $("result").classList.remove("show"));
+    health();
+    setInterval(health, 15000);
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+  </script>
+</body>
+</html>
